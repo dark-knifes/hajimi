@@ -17,7 +17,8 @@ from app.utils import (
 )
 from app.config.persistence import save_settings, load_settings
 from app.api import router, init_router, dashboard_router, init_dashboard_router
-from app.vertex.vertex import init_vertex_ai
+from app.vertex.vertex_ai_init import init_vertex_ai
+from app.vertex.credentials_manager import CredentialManager
 import app.config.settings as settings
 from app.config.safety import SAFETY_SETTINGS, SAFETY_SETTINGS_G2
 import asyncio
@@ -129,11 +130,31 @@ sys.excepthook = handle_exception
 @app.on_event("startup")
 async def startup_event():
     
-    init_vertex_ai()
+    # 首先加载持久化设置，确保所有配置都是最新的
+    load_settings()
+    
+    # 添加调试日志，检查GOOGLE_CREDENTIALS_JSON的状态
+    log('info', f"启动时检查配置状态:")
+    log('info', f"  settings.GOOGLE_CREDENTIALS_JSON: {repr(settings.GOOGLE_CREDENTIALS_JSON)}")
+    log('info', f"  环境变量 GOOGLE_CREDENTIALS_JSON: {repr(os.environ.get('GOOGLE_CREDENTIALS_JSON', 'NOT_SET'))}")
+    
+    # 重新加载vertex配置，确保获取到最新的持久化设置
+    import app.vertex.config as vertex_config
+    vertex_config.reload_config()
+    
+    # 再次检查vertex配置中的值
+    log('info', f"  vertex_config.GOOGLE_CREDENTIALS_JSON: {repr(vertex_config.GOOGLE_CREDENTIALS_JSON)}")
+    
+    # 初始化CredentialManager
+    credential_manager_instance = CredentialManager()
+    # 添加到应用程序状态
+    app.state.credential_manager = credential_manager_instance
+    
+    # 初始化Vertex AI服务
+    await init_vertex_ai(credential_manager=credential_manager_instance)
     schedule_cache_cleanup(response_cache_manager, active_requests_manager)
     # 检查版本
     await check_version()
-    load_settings()
     
     # 密钥检查 
     initial_keys = key_manager.api_keys.copy()
@@ -207,7 +228,8 @@ async def startup_event():
     init_dashboard_router(
         key_manager,
         response_cache_manager,
-        active_requests_manager
+        active_requests_manager,
+        credential_manager_instance
     )
 
 # --------------- 异常处理 ---------------
